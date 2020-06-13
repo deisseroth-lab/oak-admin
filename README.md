@@ -26,7 +26,7 @@ If you would like to test, you can run 2 jobs with `--array=0-1`, and then run
 the rest of the jobs with `--array=2-N`.
 
 ```bash
-$ sbatch --job-name=archive --array=0-N ${OAK}/admin/backup/oak-admin/tar_and_zip_dirlist.sh dirs.txt
+$ sbatch --job-name=archive --array=0-N ${OAK}/admin/oak-admin/backup/tar_and_zip_dirlist.sh dirs.txt
 # Example with 40 jobs: 
-# $ sbatch --job-name=archive --array=0-39 ${OAK}/admin/backup/oak-admin/tar_and_zip_dirlist.sh dirs.txt
+# $ sbatch --job-name=archive --array=0-39 ${OAK}/admin/oak-admin/backup/tar_and_zip_dirlist.sh dirs.txt
 ```
