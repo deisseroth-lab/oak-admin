@@ -1,5 +1,5 @@
 #!/bin/bash
-# 
+#
 #SBATCH --time=6:00:00
 #SBATCH --cpus-per-task=6
 #SBATCH --mem-per-cpu=2G
@@ -20,3 +20,8 @@ PARENTDIR=$(dirname ${DIR})
 
 cd $PARENTDIR
 tar -c --use-compress-program=pigz -f ${BASENAME}.tgz ${BASENAME}
+
+echo "Done archiving.  Removing old files."
+
+chmod a-w ${BASENAME}.tgz
+rm -r ${BASENAME}
