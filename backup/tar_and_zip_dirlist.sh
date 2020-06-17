@@ -19,9 +19,8 @@ BASENAME=$(basename ${DIR})
 PARENTDIR=$(dirname ${DIR})
 
 cd $PARENTDIR
-tar -c --use-compress-program=pigz -f ${BASENAME}.tgz ${BASENAME}
-
-echo "Done archiving.  Removing old files."
+tar -c --remove-files --use-compress-program=pigz -f ${BASENAME}.tgz ${BASENAME}
 
 chmod a-w ${BASENAME}.tgz
-rm -r ${BASENAME}
+
+echo "Done archiving and removing old files."
