@@ -15,6 +15,12 @@ DIRLIST=${1}
 readarray -t DIRS < ${DIRLIST}
 DIR=${DIRS[${SLURM_ARRAY_TASK_ID}]}
 
-rm -rf ${DIR}
+BASENAME=$(basename ${DIR})
+PARENTDIR=$(dirname ${DIR})
 
-echo "Done deleting files."
+cd $PARENTDIR
+zip -r ${BASENAME}.zip ${BASENAME}
+
+chmod a-w ${BASENAME}.zip
+
+echo "Done zipping files."
