@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=2G
+#SBATCH --mem-per-cpu=8G
 
 [ "$#" -ne 1 ] && echo "USAGE $0 <FILE_WITH_DIRECTORY_PER_LINE>" && exit
 
