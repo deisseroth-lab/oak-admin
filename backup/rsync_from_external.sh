@@ -178,7 +178,7 @@ fi
 
 #  Now, make sure the remote path is accessible.
 
-remote_path=$(echo "${1}:${2}" | tr -s /)
+remote_path=$(echo "${1}:${2}/" | tr -s /)
 if [ $DEBUG -eq 1 ]; then
 	echo "Using remote_path ${remote_path}"
 fi
@@ -199,7 +199,7 @@ fi
 
 # Now, make sure the OAK path is accessible.
 
-oak_path=$(echo "${OAK}/users/${USER}/${2}" | tr -s /)
+oak_path=$(echo "${OAK}/users/${USER}/backups/${1}/${2}/" | tr -s /)
 if [ $DEBUG -eq 1 ]; then
 	echo "Using oak_path ${oak_path}"
 fi
@@ -286,12 +286,11 @@ function signal_int {
 #  This part gets interesting.  We're going to run rsync via a subshell.
 #  Vars from the parent shell are present in the subshell, but we can't access
 #+ vars created in the subshell.  So, we'll need an output file.
-#  NOTE: Since a function takes its own arguments, we need to pass through the
-#+ arguments we got on the command line.
-trap "signal_usr1 $@" USR1
-trap "signal_int $@" INT
+trap "signal_usr1" USR1
+trap "signal_int" INT
+echo $@
 if [ $DEBUG -eq 1 ]; then
-	echo "Running rsync sync '${remote_path}' '${oak_path}'"
+	echo "Running rsync -avP '${remote_path}' '${oak_path}'"
 fi
 (
 	exec 1>${rsync_output_file} 2>&1
@@ -330,4 +329,4 @@ echo "${completion_message}" | mail -s "Backup completed for ${1}" -a ${rsync_ou
 rm ${rsync_output_file}
 
 # Submit ourselves to run tomorrow.
-exec sbatch --quiet --job-name "sync ${1}:${2}" --begin 'now+1day' $0 $@
+exec sbatch --quiet --job-name "rsync ${1}:${2}" --begin 'now+1day' $0 $@
