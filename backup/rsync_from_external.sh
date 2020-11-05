@@ -1,43 +1,27 @@
 #!/bin/bash
 # vim: ts=4 sw=4 noet
 
-#  Google Drive sync tool, using SLURM and rclone.  Last Updated 2018-12-07.
-#  Written by A. Karl Kornel <akkornel@stanford.edu>
-
-#  Copyrght (C) 2018 The Board of Trustees of the Leland Stanford Junior
-#+ University.  The contents of this file are licensed under the GNU General
-#+ Public License, Version 3.  The text of this license is included in the
-#+ source repository (in the file named 'LICENSE') and is also available at the
-#+ URL https://www.gnu.org/licenses/gpl-3.0.en.html
+#  Tool to sync directory from external computer to OAK.
 
 #  NEW USERS:
-#
-#  First of all, make sure that you are using the shared copy of this script.
-#  **Do not make your own copy!**
 #
 #  To use the script, run it directly.
 #  (In other words, run it like any other script!)
 #
-#  The script takes one argument: The directory to back up.
-#  So, to sync the directory "blah" to Google Drive, you would run like so:
-#    ./scriptname.sh blah
+#  The script takes two arguments: The external machine and the directory.
+#  So, to sync the directory "/blah" from computer "foo", you would run like so:
+#    ./scriptname.sh foo:/blah
+#
+#  The backup will be in $OAK/users/$USER/backups/foo/blah
 #
 #  The script will do some checks, and then submit itself as a SLURM job.
 #  The script does support preemption, so it can be requeued and restarted as
 #+ many times as needed.
 #  The script has a time limit; if it needs more time to complete the backup,
 #+ it will resubmit itself.
-#  Once a backup has completed, it will email you, and submit itself to re-run
+#  Once a sync has completed, it will email you, and submit itself to re-run
 #+ tomorrow.
 #
-#  NOTE: The script has protections to make sure that a directory is not being
-#+ synced multiple times simultaneously.  As a side-effect of this, you can not
-#+ use this tool to sync different directories which have the same name.
-
-#  NEW LABS:
-#
-#  New labs should refer to the 'README.md' file (part of the source
-#+ repository) for instructions on how to set this up for your lab.
 
 #
 # SLURM SETTINGS START HERE
@@ -73,23 +57,6 @@
 ##SBATCH --output /dev/null
 
 #
-# LAB-SPECIFIC SETTINGS START HERE
-#
-
-#  Code is allowed after this point.  No more #SBATCH lines will be recognized.
-
-#  This is the name of the rclone remote that refers to your lab's Team Drive.
-#+ NOTE that it is not the same thing as your actual team drive name, it's just
-#+ an identifier.
-remote_name="${USER}_gdrive_backup"
-
-#  This is the path, relative to your Team Drive's root, where backups should
-#+ go.  Note that the entire path is in quotes, so spaces etc. are allowed.
-#  Use the forward-slash character (a / character) as the path separator.
-#  NOTE: Your path should neither start nor end with a forward-slash!
-drive_path='OAK_backup'
-
-#
 # CODE STARTS HERE
 #
 
@@ -105,8 +72,7 @@ TMPDIR=${TMPDIR:=/tmp}
 # Combine standard output and standard error
 exec 2>&1
 
-
-#  Before we have any real code, define a function to email or output an error.
+# Before we have any real code, define a function to email or output an error.
 function mail_or_print {
 	#  $1 = The body of the email
 	#  $2 = The subject line of the email
@@ -128,318 +94,130 @@ function mail_or_print {
 	return 0
 }
 
-#  Next, we need a set of functions to tell us if a particular rclone exit code
+#  Next, we need a set of functions to tell us if a particular rsync exit code
 #+ has a partiuclar meaning.  We know exit code zero is "completed
 #+ successfully", but what about the others?
 #  NOTE: For these functions, returning true means returning zero, so that
 #+ the function's result can be used directly in an `if` statement.
 
-# This function returns true
-function rclone_exit_failed {
-	if [ $DEBUG -eq 1 ]; then
-		echo "In rclone_exit_failed with exit code ${1}"
-	fi
-	case $1 in
-		1)
-			return 0
-			;;
-		2)
-			return 0
-			;;
-		*)
-			return 1
-			;;
-	esac
-}
+# TODO: Add functions to detect recoverable failures (i.e. network hiccups)
+# rsync return codes:
+#  0     Success
+#  1     Syntax or usage error
+#  2     Protocol incompatibility
+#  3     Errors selecting input/output files, dirs
+#  4     Requested action not supported: an attempt was made to manipulate 64-bit
+#        files on a platform that cannot support them; or an option was specified
+#        that is supported by the client and not by the server.
+#  5     Error starting client-server protocol
+#  6     Daemon unable to append to log-file
+# 10     Error in socket I/O
+# 11     Error in file I/O
+# 12     Error in rsync protocol data stream
+# 13     Errors with program diagnostics
+# 14     Error in IPC code
+# 20     Received SIGUSR1 or SIGINT
+# 21     Some error returned by waitpid()
+# 22     Error allocating core memory buffers
+# 23     Partial transfer due to error
+# 24     Partial transfer due to vanished source files
+# 25     The --max-delete limit stopped deletions
+# 30     Timeout in data send/receive
+# 35     Timeout waiting for daemon connection
 
-#  This function returns true if the provided exit code means something was not
-#+ found, either on our end of the transfer or on the remote end.
-function rclone_exit_notfound {
+# This function returns true for any non-zero exit code.
+function rsync_exit_failed {
 	if [ $DEBUG -eq 1 ]; then
-		echo "In rclone_exit_notfound with exit code ${1}"
+		echo "In rsync_exit_failed with exit code ${1}"
 	fi
 	case $1 in
-		3)
-			return 0
-			;;
-		4)
-			return 0
-			;;
-		*)
+		0)
 			return 1
 			;;
-	esac
-}
-
-#  This function returns true if the error is due to a temporary condition,
-#+ and trying again later may resolve the issue.
-function rclone_exit_temporary {
-	if [ $DEBUG -eq 1 ]; then
-		echo "In rclone_exit_temporary with exit code ${1}"
-	fi
-	case $1 in
-		5)
-			return 0
-			;;
-		8)
-			return 0
-			;;
 		*)
-			return 1
-			;;
-	esac
-}
-
-#  This function returns true if the error is some sort of permanent failure.
-function rclone_exit_permanent {
-	if [ $DEBUG -eq 1 ]; then
-		echo "In rclone_exit_permanent with exit code ${1}"
-	fi
-	case $1 in
-		6)
 			return 0
-			;;
-		7)
-			return 0
-			;;
-		*)
-			return 1
 			;;
 	esac
 }
 
 #  Finally, define a set of functions that will send an alert on a particular
-#+ rclone condition, and then exit.
-#  TIP: 'rclone_exit_' -> "Did rclone exit because of ..."
-#  TIP: 'exit_rclone_' -> "Exit because of rclone issue ..."
+#+ rsync condition, and then exit.
+#  TIP: 'rsync_exit_' -> "Did rsync exit because of ..."
+#  TIP: 'exit_rsync_' -> "Exit because of rsync issue ..."
 
-#  This function handles alerting when rclone exited because of a generic, non-
+#  This function handles alerting when rsync exited because of a generic, non-
 #+ retryable failure.
 #  $1 is the command run.
 #  $2 is the command output.
-function exit_rclone_failed {
+function exit_rsync_failed {
 	if [ $DEBUG -eq 1 ]; then
-		echo "In exit_rclone_failed"
+		echo "In exit_rsync_failed"
 		echo "Command is ${1}"
 	fi
 	IFS='' read -r -d '' error_message <<-EOF
-	There was a problem running rclone.  This is either because of a local problem, or because of some other problem that rclone hasn't otherwise classified.  Either way, this program will not work until the underlying problem is fixed.
+	There was a problem running rsync.  This is either because of a local problem, or because of some other problem that rsync hasn't otherwise classified.  Either way, this program will not work until the underlying problem is fixed.
 
-	The rclone command run was: ${1}
-	Here is the output from rclone:
+	The rsync command run was: ${1}
+	Here is the output from rsync:
 	${2}
 EOF
-	error_subject='rclone failure [ACTION REQUIRED]'
+	error_subject='rsync failure [ACTION REQUIRED]'
 	mail_or_print "${error_message}" "${error_subject}"
 	exit 1
 }
-
-#  This function handles alerting when rclone exited because something wasn't
-#+ found.
-#  $1 is the command run.
-#  $2 is the command output.
-function exit_rclone_notfound {
-	if [ $DEBUG -eq 1 ]; then
-		echo "In exit_rclone_notfound"
-		echo "Command is ${1}"
-	fi
-	IFS='' read -r -d '' error_message <<-EOF
-	There was a problem running rclone.  One of the paths wasn't found, either a local path, or a remote path.  Either way, this program will not work until the underlying problem is fixed.
-
-	The rclone command run was: ${1}
-	Here is the output from rclone:
-	${2}
-EOF
-	error_subject='rclone path not found [ACTION REQUIRED]'
-	mail_or_print "${error_message}" "${error_subject}"
-	exit 1
-}
-
-#  This function handles alerting when rclone exited because of some sort of
-#+ permanent error.
-#  $1 is the command run.
-#  $2 is the command output.
-function exit_rclone_permanent {
-	if [ $DEBUG -eq 1 ]; then
-		echo "In exit_rclone_permanent"
-		echo "Command is ${1}"
-	fi
-	IFS='' read -r -d '' error_message <<-EOF
-	There was a problem running rclone.  The remote service reported some sort of permanent error.  This is an error that cannot be fixed by just waiting around.  Instead, some action must be taken in order to fix things.  This program will not work until the problem is fixed.
-
-	The rclone command run was: ${1}
-	Here is the output from rclone:
-	${2}
-EOF
-	error_subject='rclone remote permanent error [ACTION REQUIRED]'
-	mail_or_print "${error_message}" "${error_subject}"
-	exit 1
-}
-
-#  This function handles alerting when rclone exited because of some sort of
-#+ temporary error.  This is actually kindof weird, because the "mail" part of
-#+ `mail_or_print` probably won't be used; when running in a batch job, we'll
-#+ just resubmit ourselves with a small delay.
-#  $1 is the command run.
-#  $2 is the command output.
-function exit_rclone_temporary {
-	if [ $DEBUG -eq 1 ]; then
-		echo "In exit_rclone_temporary"
-		echo "Command is ${1}"
-	fi
-	IFS='' read -r -d '' error_message <<-EOF
-	There was a problem running rclone.  Too many remote operations have been performed, and we have been asked to wait until a later time before doing any more work.
-
-	There is no specific problem to be fixed here.  Instead, just wait a while and re-run the program.
-
-	The rclone command run was: ${1}
-	Here is the output from rclone:
-	${2}
-EOF
-	error_subject='rclone remote temporary error [TRY AGAIN LATER]'
-	mail_or_print "${error_message}" "${error_subject}"
-	exit 1
-}
-
 
 # OMG
 # Now we can actually DO STUFF!!!!!
 
-
 #  Make sure we actually have arguments
-if [ $# -ne 1 ]; then
+if [ $# -ne 2 ]; then
 	echo 'This script got the wrong number of arguments!'
-	echo 'You should be running this script with one argument: The name of a file or directory to sync.'
-	echo "For example: $0 some_directory"
+	echo 'You should be running this script with two arguments: The name of the computer and a directory to sync.'
 	exit 1
 fi
 
-#  Now, make sure we have rclone.
-#  NOTE: We can't do the `module load` in a sub-shell.  The reason is, `module
-#+ load` changes the environment, and environment changes in a subshell do not
-#+ propagate up to us.
+#  Now, make sure the remote path is accessible.
+
+remote_path=$(echo "${1}:${2}" | tr -s /)
 if [ $DEBUG -eq 1 ]; then
-	echo "Loading modules: system rclone/1.39"
+	echo "Using remote_path ${remote_path}"
 fi
-module load system rclone/1.39 2>&1
+ssh ${1} "stat ${2} > /dev/null 2>&1"
 exit_code=$?
 if [ $exit_code -ne 0 ]; then
 	IFS='' read -r -d '' error_message <<EOF
-The rclone (version 1.39) module, and the system module (which rclone 1.39 requires) could not be loaded.  This either means a problem with your configuration (if you're using a non-default Module program), or the rclone version 1.39 module may be gone (possibly replaced by a newer version?).  Either way, this program will not work until the problem is resolved and the script is updated.
+The remote path "${1}:${2}" is not accessible.  It may be that you do not have access to the computer or the directory has been moved, or renamed.   Either way, this program will not work anymore.  You should try re-submitting it with different arguments.
 EOF
-	error_subject="rclone module load problem [ACTION REQUIRED]"
-	mail_or_print "${error_message}" "${error_subject}"
-	if [ $DEBUG -eq 1 ]; then
-		echo 'ML output:'
-		echo $ml_output
-	fi
-	exit 1
-fi
-
-# Next, check that we have a "quakedrive" configuration.
-rclone_command=( rclone config show "${remote_name}" )
-if [ $DEBUG -eq 1 ]; then
-	echo "Checking for config ${remote_name}"
-	echo "command: ${rclone_command[@]}"
-fi
-rclone_output=$("${rclone_command[@]}" 2>&1)
-exit_code=$?
-if [ $DEBUG -eq 1 ]; then
-	echo "command output: ${rclone_output}"
-fi
-# No exit processing is needed here, because we're not doing remote calls.
-if [ $exit_code -ne 0 ]; then
-	IFS='' read -r -d '' error_message <<EOF
-Your rclone configuration is missing a "$remote_name" remote.  That normally means that you need to do some setup work before running this job.  This program will not work until the remote is set up.  Check with your Lab Manager, or a lab-mate, for information on how to set up the remote!
-
-For reference, your job was attempting to back up this path: ${1}
-The above path is relative to the following location: ${PWD}
-EOF
-	error_subject='rclone configuration problem [ACTION REQUIRED]'
-	mail_or_print "${error_message}" "${error_subject}"
-	exit 1
-fi
-
-#  Now, make sure the source path is accessible.
-if [ $DEBUG -eq 1 ]; then
-	echo "Checking source path: ${1}"
-fi
-stat $1 > /dev/null 2>&1
-exit_code=$?
-if [ $exit_code -ne 0 ]; then
-	IFS='' read -r -d '' error_message <<EOF
-The source path "$1" is not accessible.  It may be that the directory has been moved, or renamed.  Or maybe you did not provide a source path?  (It should be the first argument after the script.)  Either way, this program will not work anymore.  You should try re-submitting it with a new path.
-
-For reference, the source path above was relative to the following location: ${PWD}
-EOF
-	error_subject='rclone source path problem [ACTION REQUIRED]'
+	error_subject='rsync remote_path problem [ACTION REQUIRED]'
 	mail_or_print "${error_message}" "${error_subject}"
 	if [ $DEBUG -eq 1 ]; then
 		echo 'stat output:'
-		stat $1 2>&1
+		ssh ${1} "stat ${2} 2>&1"
 	fi
 	exit 1
 fi
 
-#  NOTE: This is the first point where we start making remote calls, and so we
-#+ need to check on the exit code, because we could be rate-limited.
+# Now, make sure the OAK path is accessible.
 
-#  Check the remote still exists
-rclone_command=( rclone ls "${remote_name}:" --max-depth 1 )
+oak_path=$(echo "${OAK}/users/${USER}/${2}" | tr -s /)
 if [ $DEBUG -eq 1 ]; then
-	echo 'Checking destination path'
-	echo "command: ${rclone_command[@]}"
+	echo "Using oak_path ${oak_path}"
 fi
-rclone_output=$("${rclone_command[@]}" 2>&1)
+mkdir -p ${oak_path}
 exit_code=$?
-if rclone_exit_temporary "${exit_code}"; then
-	# If we are running interactively, then just ask the user to wait.
-	# Otherwise, try running again in 15+ minutes.
-	if [ ${SLURM_JOB_ID:=0} -eq 0 ]; then
-		exit_rclone_temporary "${rclone_command[*]}" "${rclone_output}"
-	else
-		exec sbatch --quiet --job-name "Backup ${1}" --begin 'now+15minutes' $0 $@
+if [ $exit_code -ne 0 ]; then
+	IFS='' read -r -d '' error_message <<EOF
+The OAK path "${oak_path}" is cannot be accessed properly.  It may be that the directory or its parents do not have the correct permissions.  This program will not work anymore.  You should try re-submitting it with a new path.
+EOF
+	error_subject='rsync oak_path problem [ACTION REQUIRED]'
+	mail_or_print "${error_message}" "${error_subject}"
+	if [ $DEBUG -eq 1 ]; then
+		echo 'mkdir output:'
+		mkdir -p ${oak_path} 2>&1
 	fi
-fi
-if rclone_exit_failed "${exit_code}"; then
-	exit_rclone_failed "${rclone_command[*]}" "${rclone_output}"
-fi
-if rclone_exit_notfound "${exit_code}"; then
-	exit_rclone_notfound "${rclone_command[*]}" "${rclone_output}"
-fi
-if rclone_exit_permanent "${exit_code}"; then
-	exit_rclone_permanent "${rclone_command[*]}" "${rclone_output}"
+	exit 1
 fi
 
-#  Check the base directory still exists
-rclone_command=(rclone ls "${remote_name}:${drive_path}" --max-depth 1)
-if [ $DEBUG -eq 1 ]; then
-	echo 'Checking destination base path'
-	echo "command: ${rclone_command[@]}"
-fi
-rclone_output=$("${rclone_command[@]}" 2>&1)
-exit_code=$?
-if rclone_exit_temporary "${exit_code}"; then
-	# If we are running interactively, then just ask the user to wait.
-	# Otherwise, try running again in 15+ minutes.
-	if [ ${SLURM_JOB_ID:=0} -eq 0 ]; then
-		exit_rclone_temporary "${rclone_command[*]}" "${rclone_output}"
-	else
-		exec sbatch --quiet --job-name "Backup ${1}" --begin 'now+15minutes' $0 $@
-	fi
-fi
-if rclone_exit_failed "${exit_code}"; then
-	exit_rclone_failed "${rclone_command[*]}" "${rclone_output}"
-fi
-if rclone_exit_notfound "${exit_code}"; then
-	exit_rclone_notfound "${rclone_command[*]}" "${rclone_output}"
-fi
-if rclone_exit_permanent "${exit_code}"; then
-	exit_rclone_permanent "${rclone_command[*]}" "${rclone_output}"
-fi
-
-#  The directories all exist remotely, and `rclone sync` will take care of
-#+ making everything else we need, so we should now be good to go!
 #  NOTE: We do not print "good to go" unless we are running interactively.
 #  This is to reduce unnecessary output noise.
 
@@ -452,26 +230,19 @@ Attempting to submit a job.
 After this, you will either get a job ID number, or an error.
 If you get a job ID number, all further messages should come to you by email!
 EOF
-	exec sbatch --job-name="Backup ${1}" --begin=now $0 $@
+	exec sbatch --job-name="rsync ${remote_path}" --begin=now $0 $@
 fi
-
 
 # If we're here, then we are running inside a job.
 
-#  Assemble the remote path.
-remote_path=$(echo "${remote_name}:${drive_path}/${USER}/${1}" | tr -s /)
-if [ $DEBUG -eq 1 ]; then
-	echo "Using remote_path ${remote_path}"
-fi
-
-#  We'll be running rclone in a subshell.  With a subshell, variables from the
+#  We'll be running rsync in a subshell.  With a subshell, variables from the
 #+ parent are copied into the child, but then the parent has no visibility
 #+ into what the child's vars are.
 #  So, we'll need to capture subshell output into a separate temp file.
-rclone_pid=0
-rclone_output_file="${TMPDIR}/rclone.${SLURM_JOBID}.out"
+rsync_pid=0
+rsync_output_file="${TMPDIR}/rsync.${SLURM_JOBID}.out"
 if [ $DEBUG -eq 1 ]; then
-	echo "rclone output will be sent to path ${rclone_output_file}"
+	echo "rsync output will be sent to path ${rsync_output_file}"
 fi
 
 #  We also need to start looking out for our job being warned about
@@ -481,15 +252,15 @@ function signal_usr1 {
 		echo 'Received USR1 signal.  Our time has run out.'
 	fi
 
-	# Since we'll be killing rclone, unlink our temp file.
-	if [ -f ${rclone_output_file} ]; then
-		rm ${rclone_output_file}
+	# Since we'll be killing rsync, unlink our temp file.
+	if [ -f ${rsync_output_file} ]; then
+		rm ${rsync_output_file}
 	fi
 
-	#  Kill the rclone process, and then requeue ourselves.
+	#  Kill the rsync process, and then requeue ourselves.
 	#  NOTE: We use `requeue` here so that all of the executions appear under
 	#+ the same jobid, which helps with future lookups via `sacct`.
-	kill $rclone_pid
+	kill $rsync_pid
 	exec scontrol requeue ${SLURM_JOBID}
 }
 
@@ -500,19 +271,19 @@ function signal_int {
 		echo 'Received INT signal.  Killing child process and cleaning up.'
 	fi
 
-	# Since we'll be killing rclone, unlink our temp file.
-	if [ -f ${rclone_output_file} ]; then
-		rm ${rclone_output_file}
+	# Since we'll be killing rsync, unlink our temp file.
+	if [ -f ${rsync_output_file} ]; then
+		rm ${rsync_output_file}
 	fi
 
-	# Kill the rclone process, and then exit ourselves.
-	kill $rclone_pid
+	# Kill the rsync process, and then exit ourselves.
+	kill $rsync_pid
 	exit 1
 }
 
 #  All our checks look good!  Let's try running things.
 
-#  This part gets interesting.  We're going to run rclone via a subshell.
+#  This part gets interesting.  We're going to run rsync via a subshell.
 #  Vars from the parent shell are present in the subshell, but we can't access
 #+ vars created in the subshell.  So, we'll need an output file.
 #  NOTE: Since a function takes its own arguments, we need to pass through the
@@ -520,55 +291,43 @@ function signal_int {
 trap "signal_usr1 $@" USR1
 trap "signal_int $@" INT
 if [ $DEBUG -eq 1 ]; then
-	echo "Running rclone sync '$1' '${remote_path}'"
+	echo "Running rsync sync '${remote_path}' '${oak_path}'"
 fi
 (
-	exec 1>${rclone_output_file} 2>&1
-	exec rclone sync "${1}" "${remote_path}"
+	exec 1>${rsync_output_file} 2>&1
+	exec rsync -avP "${remote_path}" "${oak_path}"
 ) &
 
-#  Get the process ID of the rclone subshell
-rclone_pid=$!
+#  Get the process ID of the rsync subshell
+rsync_pid=$!
 
-#  Wait for rclone to exit, or for something else to happen
+#  Wait for rsync to exit, or for something else to happen
 if [ $DEBUG -eq 1 ]; then
-	echo "rclone launched with PID ${rclone_pid}.  Waiting..."
+	echo "rsync launched with PID ${rsync_pid}.  Waiting..."
 fi
-wait $rclone_pid
+wait $rsync_pid
 exit_code=$?
 
-# Read in the rclone output, in case we have to send an error message.
-rclone_output=$(cat ${rclone_output_file})
+# Read in the rsync output, in case we have to send an error message.
+rsync_output=$(cat ${rsync_output_file})
 
-#  rclone has exited, and we're not dead!  What happened?
-if rclone_exit_temporary "${exit_code}"; then
-	#  We are not running interactively now, so our next action is always going
-	#+ to be to resubmit ourselves.
-	exec sbatch --quiet --job-name "Backup ${1}" --begin 'now+15minutes' $0 $@
-fi
-if rclone_exit_failed "${exit_code}"; then
-	exit_rclone_failed "${rclone_command[*]}" "${rclone_output}"; exit $?
-fi
-if rclone_exit_notfound "${exit_code}"; then
-	exit_rclone_notfound "${rclone_command[*]}" "${rclone_output}"; exit $?
-fi
-if rclone_exit_permanent "${exit_code}"; then
-	exit_rclone_permanent "${rclone_command[*]}" "${rclone_output}"; exit $?
+if rsync_exit_failed "${exit_code}"; then
+	exit_rsync_failed "${rsync_command[*]}" "${rsync_output}"; exit $?
 fi
 
-# We got this far, which must mean that rclone completed!  Wooo!
+# We got this far, which must mean that rsync completed!  Wooo!
 if [ $DEBUG -eq 1 ]; then
 	echo "Sync complete!  Sending mail and scheduling to run again tomorrow."
 fi
 IFS='' read -r -d '' completion_message <<EOF
-Your backup of path ${1} has been completed without errors!
+Your backup of path ${remote_path} has been completed without errors!
 
-The output of the \`rclone\` command is attached.  Please check it for problems.
+The output of the \`rsync\` command is attached.  Please check it for problems.
 EOF
-echo "${completion_message}" | mail -s "Backup completed for ${1}" -a ${rclone_output_file} ${USER}
+echo "${completion_message}" | mail -s "Backup completed for ${1}" -a ${rsync_output_file} ${USER}
 
-# Clean up the rclone output file
-rm ${rclone_output_file}
+# Clean up the rsync output file
+rm ${rsync_output_file}
 
 # Submit ourselves to run tomorrow.
-exec sbatch --quiet --job-name "Backup ${1}" --begin 'now+1day' $0 $@
+exec sbatch --quiet --job-name "sync ${1}:${2}" --begin 'now+1day' $0 $@
