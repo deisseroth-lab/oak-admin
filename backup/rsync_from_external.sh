@@ -28,7 +28,7 @@
 #
 
 #  The partition to use.  If possible, choose a preemptable partition.
-SBATCH --partition owners
+#SBATCH --partition owners
 
 #  Use one CPU core, 2G RAM, and support sharing resources (if allowed).
 #SBATCH --ntasks 1
