@@ -10,7 +10,7 @@
 #
 #  The script takes two arguments: The external machine and the directory.
 #  So, to sync the directory "/blah" from computer "foo", you would run like so:
-#    ./scriptname.sh foo:/blah
+#    ./scriptname.sh user@foo /blah
 #
 #  The backup will be in $OAK/users/$USER/backups/foo/blah
 #
@@ -28,7 +28,7 @@
 #
 
 #  The partition to use.  If possible, choose a preemptable partition.
-#SBATCH --partition normal
+SBATCH --partition owners
 
 #  Use one CPU core, 2G RAM, and support sharing resources (if allowed).
 #SBATCH --ntasks 1
