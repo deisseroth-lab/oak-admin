@@ -26,18 +26,18 @@ If you would like to test, you can run 2 jobs with `--array=0-1`, and then run
 the rest of the jobs with `--array=2-N`.
 
 ```bash
-$ sbatch --job-name=archive --array=0-N ${OAK}/admin/oak-admin/backup/tar_and_gzip_dirlist.sh dirs.txt
+$ sbatch --job-name=archive --partion=owners --array=0-N ${OAK}/admin/oak-admin/backup/tar_and_gzip_dirlist.sh dirs.txt
 
 # Alternative, using zip (less compression, but easier single file extraction)
-$ sbatch --job-name=archive --array=0-N ${OAK}/admin/oak-admin/backup/zip_dirlist.sh dirs.txt
+$ sbatch --job-name=archive --partion=owners --array=0-N ${OAK}/admin/oak-admin/backup/zip_dirlist.sh dirs.txt
 
 # Example with 40 jobs:
-# $ sbatch --job-name=archive --array=0-39 ${OAK}/admin/oak-admin/backup/tar_and_gzip_dirlist.sh dirs.txt
+# $ sbatch --job-name=archive --partion=owners --array=0-39 ${OAK}/admin/oak-admin/backup/tar_and_gzip_dirlist.sh dirs.txt
 ```
 
 Note that for safety, the above commands do not delete the original files.  To subsequently
 run jobs to delete the files, use the following command:
 
 ```bash
-$ sbatch --job-name=delete --array=0-N ${OAK}/admin/oak-admin/backup/del_dirlist.sh dirs.txt
+$ sbatch --job-name=delete --partion=owners --array=0-N ${OAK}/admin/oak-admin/backup/del_dirlist.sh dirs.txt
 ```
