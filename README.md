@@ -11,9 +11,9 @@ to archive.  The following command shows how you might do this on the command
 line, creating a file called `dirs.txt`.  Verify the contents of the file before
 proceeding, and edit if necessary.
 
-** Note that this command is run on Sherlock.  If you create your text file on
+**Note that this command is run on Sherlock.  If you create your text file on
 Windows, make sure to switch to newline ('\n') line separators and 
-forward slash ('/') directory separators. **
+forward slash ('/') directory separators.**
 
 ```bash
 $ ls -d ${OAK}/users/${USER}/SOME/DIRECTORY/PATTERN > dirs.txt
